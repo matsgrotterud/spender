@@ -4,11 +4,20 @@ import { useState } from "react";
 import { signIn } from "next-auth/react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { Building2, ShieldCheck, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { cn } from "@/lib/utils";
+import { DEMO_ACCOUNTS, DEMO_PASSWORD, isDemoLoginEnabled } from "@/lib/demo-accounts";
+
+const DEMO_ICONS = {
+  consumer: User,
+  business: Building2,
+  admin: ShieldCheck,
+} as const;
 
 function safeCallbackUrl(raw: string | null): string {
   if (raw && raw.startsWith("/") && !raw.startsWith("//")) {
@@ -21,33 +30,61 @@ export function LoginForm() {
   const searchParams = useSearchParams();
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [activeDemoId, setActiveDemoId] = useState<string | null>(null);
+  const showDemoLogins = isDemoLoginEnabled();
+
+  async function performLogin(email: string, password: string, destination: string) {
+    setError(null);
+
+    const result = await signIn("credentials", {
+      email,
+      password,
+      redirect: false,
+    });
+
+    if (!result?.ok || result.error) {
+      throw new Error("invalid_credentials");
+    }
+
+    window.location.assign(destination);
+  }
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setLoading(true);
+    setActiveDemoId(null);
     setError(null);
 
     const formData = new FormData(event.currentTarget);
     const destination = safeCallbackUrl(searchParams.get("callbackUrl"));
 
     try {
-      const result = await signIn("credentials", {
-        email: String(formData.get("email") ?? ""),
-        password: String(formData.get("password") ?? ""),
-        redirect: false,
-      });
-
-      if (!result?.ok || result.error) {
-        setError("Feil e-post eller passord. Prøv igjen.");
-        return;
-      }
-
-      // Full page navigation so the session cookie is applied before middleware runs.
-      window.location.assign(destination);
+      await performLogin(
+        String(formData.get("email") ?? ""),
+        String(formData.get("password") ?? ""),
+        destination,
+      );
     } catch {
-      setError("Innlogging feilet. Prøv igjen om litt.");
+      setError("Feil e-post eller passord. Prøv igjen.");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function onDemoLogin(account: (typeof DEMO_ACCOUNTS)[number]) {
+    setLoading(true);
+    setActiveDemoId(account.id);
+    setError(null);
+
+    try {
+      await performLogin(account.email, DEMO_PASSWORD, account.destination);
+    } catch {
+      setError(
+        `Kunne ikke logge inn som ${account.label.toLowerCase()}. Kjør db:seed mot databasen hvis demokontoer mangler.`,
+      );
+    } finally {
+      setLoading(false);
+      setActiveDemoId(null);
     }
   }
 
@@ -57,7 +94,7 @@ export function LoginForm() {
         <CardTitle className="text-xl">Logg inn</CardTitle>
         <CardDescription>Velkommen tilbake til Spender.</CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-6">
         <form onSubmit={onSubmit} className="space-y-4">
           {error && (
             <Alert variant="destructive">
@@ -79,10 +116,56 @@ export function LoginForm() {
             />
           </div>
           <Button type="submit" className="w-full" disabled={loading}>
-            {loading ? "Logger inn …" : "Logg inn"}
+            {loading && !activeDemoId ? "Logger inn …" : "Logg inn"}
           </Button>
         </form>
-        <div className="mt-4 space-y-1 text-center text-sm text-muted-foreground">
+
+        {showDemoLogins && (
+          <div className="space-y-3 border-t pt-6">
+            <div>
+              <p className="text-sm font-medium">Demokontoer</p>
+              <p className="text-xs text-muted-foreground">
+                Test alle deler av plattformen med ett klikk. Passord:{" "}
+                <span className="font-mono">{DEMO_PASSWORD}</span>
+              </p>
+            </div>
+            <div className="space-y-2">
+              {DEMO_ACCOUNTS.map((account) => {
+                const Icon = DEMO_ICONS[account.id as keyof typeof DEMO_ICONS];
+                const isActive = activeDemoId === account.id;
+
+                return (
+                  <button
+                    key={account.id}
+                    type="button"
+                    disabled={loading}
+                    onClick={() => onDemoLogin(account)}
+                    className={cn(
+                      "flex w-full items-start gap-3 rounded-lg border bg-card p-3 text-left transition-colors",
+                      "hover:border-primary/40 hover:bg-accent/50",
+                      "disabled:pointer-events-none disabled:opacity-60",
+                      isActive && "border-primary bg-primary/5",
+                    )}
+                  >
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-primary/10">
+                      <Icon className="h-4 w-4 text-primary" aria-hidden />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="font-medium">{account.label}</p>
+                      <p className="truncate text-xs text-muted-foreground">{account.email}</p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">{account.description}</p>
+                    </div>
+                    <span className="shrink-0 text-xs text-primary">
+                      {isActive ? "Logger inn …" : "Logg inn →"}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        <div className="space-y-1 text-center text-sm text-muted-foreground">
           <p>
             Ny her?{" "}
             <Link href="/registrer" className="text-primary underline underline-offset-2">
