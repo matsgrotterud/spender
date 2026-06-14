@@ -45,6 +45,8 @@ npm run dev
 
 Appen kjører på [http://localhost:3000](http://localhost:3000). Alt fungerer uten eksterne API-nøkler – betaling, e-post m.m. kjører i mock-modus (se status under **Admin → System**).
 
+**Deploy på Vercel:** se [docs/VERCEL_DEPLOY.md](docs/VERCEL_DEPLOY.md) for database, miljøvariabler og seed mot produksjon.
+
 ## Demokontoer
 
 Alle med passord `Demo123!`:

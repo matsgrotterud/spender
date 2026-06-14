@@ -3,6 +3,7 @@ import CredentialsProvider from "next-auth/providers/credentials";
 import { db } from "@/lib/db";
 import { verifyPassword } from "@/lib/auth/password";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { env } from "@/lib/env";
 import { z } from "zod";
 
 const credentialsSchema = z.object({
@@ -20,6 +21,7 @@ const credentialsSchema = z.object({
  *   docs/PROVIDE_KEYS_AND_CONFIG.md for what an agreement requires.
  */
 export const authOptions: NextAuthOptions = {
+  secret: env.authSecret || process.env.NEXTAUTH_SECRET,
   session: {
     strategy: "jwt",
     maxAge: 60 * 60 * 24 * 7, // 7 days
