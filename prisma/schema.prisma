@@ -1,0 +1,846 @@
+// Spender – privacy-first offer marketplace
+//
+// Privacy invariants encoded in this schema:
+// - Direct identifiers live ONLY in encrypted payloads (UserPrivateProfile.encryptedPayload,
+//   DemandRequest.encryptedPrivatePayload). Businesses never query these tables/columns.
+// - Businesses read DemandRequest.publicSnapshotJson only.
+// - Contact data flows to a business only via an ACTIVE recipient-specific ConsentGrant.
+// - All access/reveal events are written to DataAccessLog; admin actions to AuditLog.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum UserRole {
+  CONSUMER
+  BUSINESS_OWNER
+  BUSINESS_MEMBER
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  PENDING_DELETION
+  DELETED
+}
+
+enum OrganizationStatus {
+  PENDING_REVIEW
+  VERIFIED
+  SUSPENDED
+  REJECTED
+}
+
+enum BillingStatus {
+  NONE
+  TRIAL
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+}
+
+enum OrgMemberRole {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+enum VerificationProvider {
+  BRREG
+  MANUAL
+  BANKID_SIGNING
+  OTHER
+}
+
+enum VerificationStatus {
+  PENDING
+  PASSED
+  FAILED
+  NEEDS_REVIEW
+}
+
+enum DemandRequestStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  EXPIRED
+  CLOSED
+}
+
+enum OfferStatus {
+  DRAFT
+  SENT
+  VIEWED
+  ACCEPTED
+  DECLINED
+  EXPIRED
+  WITHDRAWN
+}
+
+enum CampaignStatus {
+  DRAFT
+  SCHEDULED
+  RUNNING
+  COMPLETED
+  CANCELLED
+}
+
+enum CampaignRecipientStatus {
+  PENDING
+  SENT
+  SKIPPED_DUPLICATE
+  SKIPPED_LIMIT
+  FAILED
+}
+
+enum ConsentStatus {
+  ACTIVE
+  WITHDRAWN
+  EXPIRED
+}
+
+enum CreditEntryType {
+  GRANT
+  PURCHASE
+  SPEND
+  REFUND
+  ADJUSTMENT
+}
+
+enum PricingScope {
+  SUBSCRIPTION
+  CREDIT_COST
+  CONTACT_UNLOCK
+  CAMPAIGN_SEND
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  TRIALING
+  PAST_DUE
+  CANCELLED
+  INCOMPLETE
+}
+
+enum IntegrationProvider {
+  HUBSPOT
+  SALESFORCE
+  WEBHOOK
+  ZAPIER
+  N8N
+  CUSTOM_API
+  BRREG
+  STRIPE
+  VIPPS
+  BANKID
+  RESEND
+}
+
+enum IntegrationStatus {
+  NOT_CONFIGURED
+  ACTIVE
+  ERROR
+  DISABLED
+}
+
+enum DsrType {
+  ACCESS
+  EXPORT
+  DELETE
+  RECTIFY
+  RESTRICT_PROCESSING
+  OBJECT
+}
+
+enum DsrStatus {
+  OPEN
+  IN_PROGRESS
+  COMPLETED
+  REJECTED
+}
+
+enum WebhookDeliveryStatus {
+  PENDING
+  DELIVERED
+  FAILED
+}
+
+enum ArticleStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum ReportStatus {
+  OPEN
+  REVIEWED
+  ACTION_TAKEN
+  DISMISSED
+}
+
+// ---------------------------------------------------------------------------
+// Identity & profiles
+// ---------------------------------------------------------------------------
+
+model User {
+  id              String     @id @default(cuid())
+  email           String     @unique
+  passwordHash    String?
+  role            UserRole   @default(CONSUMER)
+  status          UserStatus @default(ACTIVE)
+  emailVerifiedAt DateTime?
+  lastLoginAt     DateTime?
+  // BankID/Vipps verified-identity flags only. NEVER store fødselsnummer.
+  identityVerified          Boolean   @default(false)
+  identityAssuranceLevel    String?
+  identityProviderSubjectId String?
+  identityVerifiedAt        DateTime?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  deletedAt       DateTime?
+
+  privateProfile      UserPrivateProfile?
+  consumerProfile     ConsumerProfile?
+  orgMemberships      OrganizationMember[]
+  demandRequests      DemandRequest[]
+  offersCreated       Offer[]              @relation("OfferCreatedBy")
+  campaignsCreated    BulkCampaign[]
+  messages            Message[]
+  consentGrants       ConsentGrant[]
+  dataAccessLogsActor DataAccessLog[]      @relation("AccessActor")
+  dataAccessLogsTarget DataAccessLog[]     @relation("AccessTarget")
+  auditLogs           AuditLog[]
+  dataSubjectRequests DataSubjectRequest[]
+  notifications       Notification[]
+  conversations       Conversation[]
+  verificationsReviewed BusinessVerification[]
+  savedSearches       SavedSearch[]
+  offerReports        OfferReport[]
+  cookieConsents      CookieConsent[]
+
+  @@index([role, status])
+}
+
+/// Direct identifiers, AES-256-GCM encrypted. Never exposed to businesses
+/// without a recipient-specific ConsentGrant.
+model UserPrivateProfile {
+  id               String    @id @default(cuid())
+  userId           String    @unique
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  encryptedPayload String
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  deletedAt        DateTime?
+}
+
+/// Pseudonymous, privacy-safe consumer profile. This is the only profile
+/// surface businesses can ever see.
+model ConsumerProfile {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  displayAlias  String   @unique
+  ageRange      String?
+  region        String?
+  householdType String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Organizations
+// ---------------------------------------------------------------------------
+
+model Organization {
+  id            String             @id @default(cuid())
+  name          String
+  orgNumber     String             @unique
+  website       String?
+  status        OrganizationStatus @default(PENDING_REVIEW)
+  billingStatus BillingStatus      @default(NONE)
+  suspendedReason String?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  members          OrganizationMember[]
+  verifications    BusinessVerification[]
+  offers           Offer[]
+  campaigns        BulkCampaign[]
+  conversations    Conversation[]
+  consentGrants    ConsentGrant[]
+  subscriptions    Subscription[]
+  creditLedger     CreditLedger[]
+  apiKeys          ApiKey[]
+  webhookEndpoints WebhookEndpoint[]
+  integrations     IntegrationConnection[]
+  dataAccessLogs   DataAccessLog[]
+  auditLogs        AuditLog[]
+  savedSearches    SavedSearch[]
+  offerTemplates   OfferTemplate[]
+
+  @@index([status])
+}
+
+model OrganizationMember {
+  id             String        @id @default(cuid())
+  organizationId String
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role           OrgMemberRole @default(MEMBER)
+  createdAt      DateTime      @default(now())
+
+  @@unique([organizationId, userId])
+  @@index([userId])
+}
+
+model BusinessVerification {
+  id                String               @id @default(cuid())
+  organizationId    String
+  organization      Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  provider          VerificationProvider
+  status            VerificationStatus   @default(PENDING)
+  resultJson        Json?
+  verifiedAt        DateTime?
+  reviewedByAdminId String?
+  reviewedByAdmin   User?                @relation(fields: [reviewedByAdminId], references: [id])
+  createdAt         DateTime             @default(now())
+
+  @@index([organizationId])
+}
+
+// ---------------------------------------------------------------------------
+// Categories & demand requests
+// ---------------------------------------------------------------------------
+
+model Category {
+  id                      String   @id @default(cuid())
+  slug                    String   @unique
+  name                    String
+  description             String
+  consumerFormSchemaJson  Json
+  businessOfferSchemaJson Json
+  publicSnapshotRulesJson Json
+  isActive                Boolean  @default(true)
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  demandRequests DemandRequest[]
+  offers         Offer[]
+  campaigns      BulkCampaign[]
+}
+
+model DemandRequest {
+  id                      String              @id @default(cuid())
+  consumerId              String
+  consumer                User                @relation(fields: [consumerId], references: [id])
+  categoryId              String
+  category                Category            @relation(fields: [categoryId], references: [id])
+  title                   String
+  status                  DemandRequestStatus @default(DRAFT)
+  /// What businesses see. Derived from the private payload via category snapshot rules.
+  publicSnapshotJson      Json
+  /// Full consumer answers, AES-256-GCM encrypted. Never readable by businesses.
+  encryptedPrivatePayload String
+  consentProfileJson      Json?
+  region                  String?
+  priceZone               String?
+  expiresAt               DateTime?
+  anonymizedAt            DateTime?
+  createdAt               DateTime            @default(now())
+  updatedAt               DateTime            @updatedAt
+  deletedAt               DateTime?
+
+  versions           DemandRequestVersion[]
+  offers             Offer[]
+  conversations      Conversation[]
+  consentGrants      ConsentGrant[]
+  campaignRecipients BulkCampaignRecipient[]
+  dataAccessLogs     DataAccessLog[]
+
+  @@index([status, categoryId, region])
+  @@index([consumerId])
+  @@index([expiresAt])
+}
+
+model DemandRequestVersion {
+  id                      String        @id @default(cuid())
+  demandRequestId         String
+  demandRequest           DemandRequest @relation(fields: [demandRequestId], references: [id], onDelete: Cascade)
+  versionNumber           Int
+  publicSnapshotJson      Json
+  encryptedPrivatePayload String
+  createdAt               DateTime      @default(now())
+
+  @@unique([demandRequestId, versionNumber])
+}
+
+// ---------------------------------------------------------------------------
+// Offers
+// ---------------------------------------------------------------------------
+
+model Offer {
+  id               String       @id @default(cuid())
+  organizationId   String
+  organization     Organization @relation(fields: [organizationId], references: [id])
+  demandRequestId  String
+  demandRequest    DemandRequest @relation(fields: [demandRequestId], references: [id])
+  categoryId       String
+  category         Category     @relation(fields: [categoryId], references: [id])
+  status           OfferStatus  @default(DRAFT)
+  title            String
+  summary          String
+  offerPayloadJson Json
+  priceEstimateJson Json?
+  termsJson        Json?
+  validUntil       DateTime?
+  declineReason    String?
+  isShortlisted    Boolean      @default(false)
+  createdByUserId  String
+  createdByUser    User         @relation("OfferCreatedBy", fields: [createdByUserId], references: [id])
+  sentAt           DateTime?
+  viewedAt         DateTime?
+  respondedAt      DateTime?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  comparisonScore    OfferComparisonScore?
+  conversations      Conversation[]
+  consentGrants      ConsentGrant[]
+  campaignRecipients BulkCampaignRecipient[]
+  reports            OfferReport[]
+
+  @@unique([organizationId, demandRequestId])
+  @@index([demandRequestId, status])
+  @@index([organizationId, status])
+}
+
+model OfferComparisonScore {
+  id              String   @id @default(cuid())
+  offerId         String   @unique
+  offer           Offer    @relation(fields: [offerId], references: [id], onDelete: Cascade)
+  score           Int
+  explanationJson Json
+  createdAt       DateTime @default(now())
+}
+
+model OfferReport {
+  id             String       @id @default(cuid())
+  offerId        String
+  offer          Offer        @relation(fields: [offerId], references: [id], onDelete: Cascade)
+  reporterUserId String
+  reporter       User         @relation(fields: [reporterUserId], references: [id])
+  reason         String
+  status         ReportStatus @default(OPEN)
+  adminNotes     String?
+  createdAt      DateTime     @default(now())
+
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// Bulk campaigns
+// ---------------------------------------------------------------------------
+
+model BulkCampaign {
+  id                      String         @id @default(cuid())
+  organizationId          String
+  organization            Organization   @relation(fields: [organizationId], references: [id])
+  categoryId              String
+  category                Category       @relation(fields: [categoryId], references: [id])
+  name                    String
+  status                  CampaignStatus @default(DRAFT)
+  targetCriteriaJson      Json
+  offerTemplateJson       Json
+  estimatedRecipientCount Int            @default(0)
+  estimatedCreditCost     Int            @default(0)
+  actualCreditCost        Int            @default(0)
+  idempotencyKey          String?        @unique
+  createdByUserId         String
+  createdByUser           User           @relation(fields: [createdByUserId], references: [id])
+  createdAt               DateTime       @default(now())
+  scheduledAt             DateTime?
+  completedAt             DateTime?
+
+  recipients BulkCampaignRecipient[]
+
+  @@index([organizationId, status])
+}
+
+model BulkCampaignRecipient {
+  id              String                  @id @default(cuid())
+  campaignId      String
+  campaign        BulkCampaign            @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  demandRequestId String
+  demandRequest   DemandRequest           @relation(fields: [demandRequestId], references: [id])
+  offerId         String?
+  offer           Offer?                  @relation(fields: [offerId], references: [id])
+  status          CampaignRecipientStatus @default(PENDING)
+  errorMessage    String?
+  createdAt       DateTime                @default(now())
+
+  @@unique([campaignId, demandRequestId])
+}
+
+// ---------------------------------------------------------------------------
+// Conversations & messages
+// ---------------------------------------------------------------------------
+
+model Conversation {
+  id              String        @id @default(cuid())
+  demandRequestId String
+  demandRequest   DemandRequest @relation(fields: [demandRequestId], references: [id])
+  offerId         String?
+  offer           Offer?        @relation(fields: [offerId], references: [id])
+  consumerId      String
+  consumer        User          @relation(fields: [consumerId], references: [id])
+  organizationId  String
+  organization    Organization  @relation(fields: [organizationId], references: [id])
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  messages Message[]
+
+  @@unique([demandRequestId, organizationId])
+  @@index([consumerId])
+  @@index([organizationId])
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderUserId   String
+  sender         User         @relation(fields: [senderUserId], references: [id])
+  body           String
+  attachmentId   String?
+  createdAt      DateTime     @default(now())
+  deletedAt      DateTime?
+
+  @@index([conversationId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Consent & privacy ledgers
+// ---------------------------------------------------------------------------
+
+/// Recipient-specific consent ledger. A business can only read selected
+/// contact fields while an ACTIVE grant exists for that exact organization.
+model ConsentGrant {
+  id                 String        @id @default(cuid())
+  userId             String
+  user               User          @relation(fields: [userId], references: [id])
+  demandRequestId    String?
+  demandRequest      DemandRequest? @relation(fields: [demandRequestId], references: [id])
+  organizationId     String?
+  organization       Organization? @relation(fields: [organizationId], references: [id])
+  offerId            String?
+  offer              Offer?        @relation(fields: [offerId], references: [id])
+  purpose            String
+  scopeJson          Json
+  status             ConsentStatus @default(ACTIVE)
+  consentTextVersion String
+  ipHash             String?
+  userAgentHash      String?
+  grantedAt          DateTime      @default(now())
+  withdrawnAt        DateTime?
+
+  @@index([userId, status])
+  @@index([organizationId, status])
+}
+
+/// Log of every read/reveal/export of person-related data.
+model DataAccessLog {
+  id              String         @id @default(cuid())
+  actorUserId     String?
+  actorUser       User?          @relation("AccessActor", fields: [actorUserId], references: [id])
+  targetUserId    String?
+  targetUser      User?          @relation("AccessTarget", fields: [targetUserId], references: [id])
+  organizationId  String?
+  organization    Organization?  @relation(fields: [organizationId], references: [id])
+  demandRequestId String?
+  demandRequest   DemandRequest? @relation(fields: [demandRequestId], references: [id])
+  offerId         String?
+  action          String
+  dataScope       String
+  reason          String?
+  ipHash          String?
+  createdAt       DateTime       @default(now())
+
+  @@index([targetUserId, createdAt])
+  @@index([organizationId, createdAt])
+}
+
+model AuditLog {
+  id             String        @id @default(cuid())
+  actorUserId    String?
+  actorUser      User?         @relation(fields: [actorUserId], references: [id])
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  action         String
+  entityType     String
+  entityId       String
+  beforeJson     Json?
+  afterJson      Json?
+  createdAt      DateTime      @default(now())
+
+  @@index([entityType, entityId])
+  @@index([actorUserId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Billing
+// ---------------------------------------------------------------------------
+
+model SubscriptionPlan {
+  id                 String  @id @default(cuid())
+  slug               String  @unique
+  name               String
+  monthlyPriceNok    Int
+  includedCredits    Int
+  maxSeats           Int
+  maxActiveCampaigns Int
+  featuresJson       Json
+  stripePriceId      String?
+  isActive           Boolean @default(true)
+
+  subscriptions Subscription[]
+}
+
+model Subscription {
+  id                   String             @id @default(cuid())
+  organizationId       String
+  organization         Organization       @relation(fields: [organizationId], references: [id])
+  planId               String
+  plan                 SubscriptionPlan   @relation(fields: [planId], references: [id])
+  status               SubscriptionStatus @default(ACTIVE)
+  currentPeriodStart   DateTime
+  currentPeriodEnd     DateTime
+  stripeCustomerId     String?
+  stripeSubscriptionId String?            @unique
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  @@index([organizationId, status])
+}
+
+model CreditLedger {
+  id             String          @id @default(cuid())
+  organizationId String
+  organization   Organization    @relation(fields: [organizationId], references: [id])
+  amount         Int
+  type           CreditEntryType
+  reason         String
+  referenceType  String?
+  referenceId    String?
+  idempotencyKey String?         @unique
+  createdAt      DateTime        @default(now())
+
+  @@index([organizationId, createdAt])
+}
+
+model PricingRule {
+  id        String       @id @default(cuid())
+  name      String
+  scope     PricingScope
+  ruleJson  Json
+  isActive  Boolean      @default(true)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// API & integrations
+// ---------------------------------------------------------------------------
+
+model ApiKey {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  /// SHA-256 hash of the key. The plaintext is shown once at creation.
+  hashedKey      String       @unique
+  keyPrefix      String
+  scopesJson     Json
+  lastUsedAt     DateTime?
+  createdAt      DateTime     @default(now())
+  revokedAt      DateTime?
+
+  @@index([organizationId])
+}
+
+model WebhookEndpoint {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  url            String
+  secret         String
+  eventsJson     Json
+  isActive       Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  deliveries WebhookDelivery[]
+}
+
+model WebhookDelivery {
+  id                String                @id @default(cuid())
+  webhookEndpointId String
+  webhookEndpoint   WebhookEndpoint       @relation(fields: [webhookEndpointId], references: [id], onDelete: Cascade)
+  eventType         String
+  payloadJson       Json
+  status            WebhookDeliveryStatus @default(PENDING)
+  attempts          Int                   @default(0)
+  lastError         String?
+  idempotencyKey    String?               @unique
+  createdAt         DateTime              @default(now())
+  deliveredAt       DateTime?
+
+  @@index([webhookEndpointId, status])
+}
+
+model IntegrationConnection {
+  id                  String              @id @default(cuid())
+  organizationId      String
+  organization        Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  provider            IntegrationProvider
+  status              IntegrationStatus   @default(NOT_CONFIGURED)
+  encryptedConfigJson String?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  @@unique([organizationId, provider])
+}
+
+// ---------------------------------------------------------------------------
+// GDPR / notifications / content
+// ---------------------------------------------------------------------------
+
+model DataSubjectRequest {
+  id                 String    @id @default(cuid())
+  userId             String
+  user               User      @relation(fields: [userId], references: [id])
+  type               DsrType
+  status             DsrStatus @default(OPEN)
+  requestPayloadJson Json?
+  adminNotes         String?
+  createdAt          DateTime  @default(now())
+  completedAt        DateTime?
+
+  @@index([status])
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String
+  title     String
+  body      String
+  linkUrl   String?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, readAt])
+}
+
+model CookieConsent {
+  id              String   @id @default(cuid())
+  userId          String?
+  user            User?    @relation(fields: [userId], references: [id])
+  anonymousId     String?
+  preferencesJson Json
+  consentVersion  String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([userId])
+  @@index([anonymousId])
+}
+
+model Article {
+  id              String        @id @default(cuid())
+  slug            String        @unique
+  title           String
+  excerpt         String
+  /// Markdown body
+  body            String
+  categorySlug    String?
+  status          ArticleStatus @default(DRAFT)
+  seoTitle        String?
+  seoDescription  String?
+  publishedAt     DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([status, publishedAt])
+}
+
+model FaqItem {
+  id        String   @id @default(cuid())
+  question  String
+  answer    String
+  audience  String   @default("consumer") // consumer | business | general
+  sortOrder Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Business workflow helpers
+// ---------------------------------------------------------------------------
+
+model SavedSearch {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User         @relation(fields: [userId], references: [id])
+  name           String
+  criteriaJson   Json
+  notifyByEmail  Boolean      @default(false)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId])
+}
+
+model OfferTemplate {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  categorySlug   String
+  name           String
+  payloadJson    Json
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId, categorySlug])
+}
+
+/// Internal analytics events. Privacy-safe by design: no direct identifiers
+/// in properties, respects cookie consent for anonymous visitors.
+model AnalyticsEvent {
+  id         String   @id @default(cuid())
+  name       String
+  userId     String?
+  orgId      String?
+  properties Json?
+  createdAt  DateTime @default(now())
+
+  @@index([name, createdAt])
+}
