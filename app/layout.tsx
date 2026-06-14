@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { CookieBanner } from "@/components/site/cookie-banner";
+import { AuthProvider } from "@/components/providers/auth-provider";
 import { env } from "@/lib/env";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-sans" });
@@ -20,7 +21,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="nb">
       <body className={`${inter.variable} font-sans`}>
-        {children}
+        <AuthProvider>{children}</AuthProvider>
         <CookieBanner />
       </body>
     </html>

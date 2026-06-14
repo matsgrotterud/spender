@@ -1,16 +1,19 @@
-import { NextResponse } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 import { getCurrentUser } from "@/lib/auth/session";
-import { env } from "@/lib/env";
 
 /** Redirects a freshly logged-in user to the dashboard matching their role. */
-export async function GET() {
+export async function GET(request: NextRequest) {
   const user = await getCurrentUser();
-  if (!user) return NextResponse.redirect(`${env.appUrl}/logg-inn`);
+  const origin = request.nextUrl.origin;
+
+  if (!user) {
+    return NextResponse.redirect(new URL("/logg-inn", origin));
+  }
   if (user.role === "ADMIN" || user.role === "SUPER_ADMIN") {
-    return NextResponse.redirect(`${env.appUrl}/admin`);
+    return NextResponse.redirect(new URL("/admin", origin));
   }
   if (user.role === "BUSINESS_OWNER" || user.role === "BUSINESS_MEMBER") {
-    return NextResponse.redirect(`${env.appUrl}/bedrift/app`);
+    return NextResponse.redirect(new URL("/bedrift/app", origin));
   }
-  return NextResponse.redirect(`${env.appUrl}/app`);
+  return NextResponse.redirect(new URL("/app", origin));
 }

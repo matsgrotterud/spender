@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { signIn } from "next-auth/react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,8 +10,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 
+function safeCallbackUrl(raw: string | null): string {
+  if (raw && raw.startsWith("/") && !raw.startsWith("//")) {
+    return raw;
+  }
+  return "/etter-innlogging";
+}
+
 export function LoginForm() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -22,26 +28,27 @@ export function LoginForm() {
     setError(null);
 
     const formData = new FormData(event.currentTarget);
-    const result = await signIn("credentials", {
-      email: String(formData.get("email") ?? ""),
-      password: String(formData.get("password") ?? ""),
-      redirect: false,
-    });
+    const destination = safeCallbackUrl(searchParams.get("callbackUrl"));
 
-    setLoading(false);
-    if (result?.error) {
-      setError("Feil e-post eller passord. Prøv igjen.");
-      return;
-    }
+    try {
+      const result = await signIn("credentials", {
+        email: String(formData.get("email") ?? ""),
+        password: String(formData.get("password") ?? ""),
+        redirect: false,
+      });
 
-    const callbackUrl = searchParams.get("callbackUrl");
-    if (callbackUrl && callbackUrl.startsWith("/")) {
-      router.push(callbackUrl);
-    } else {
-      // Resolve role-specific landing page server-side.
-      router.push("/etter-innlogging");
+      if (!result?.ok || result.error) {
+        setError("Feil e-post eller passord. Prøv igjen.");
+        return;
+      }
+
+      // Full page navigation so the session cookie is applied before middleware runs.
+      window.location.assign(destination);
+    } catch {
+      setError("Innlogging feilet. Prøv igjen om litt.");
+    } finally {
+      setLoading(false);
     }
-    router.refresh();
   }
 
   return (
