@@ -51,8 +51,8 @@ Legg inn for **Production** (og gjerne Preview):
 
 | Variabel | Verdi |
 | --- | --- |
-| `DATABASE_URL` | Neon pooled connection string |
-| `DIRECT_URL` | Neon direct connection string |
+| `DATABASE_URL` | Neon **pooled** connection string (eller Vercel Postgres `POSTGRES_URL`) |
+| `DIRECT_URL` | Neon **direct** connection string. **Mangler denne?** Sett samme verdi som `DATABASE_URL` – build-scriptet faller tilbake automatisk, men det er tryggest å legge den inn eksplisitt. |
 | `AUTH_SECRET` | output fra openssl (steg 2) |
 | `NEXTAUTH_SECRET` | **samme** som AUTH_SECRET |
 | `NEXTAUTH_URL` | `https://spender-chi-one.vercel.app` |
