@@ -60,6 +60,7 @@ Legg inn for **Production** (og gjerne Preview):
 | `ENCRYPTION_KEY` | output fra openssl (steg 2, 64 tegn) |
 | `FEATURE_MOCK_BILLING` | `true` |
 | `FEATURE_MOCK_EMAIL` | `true` |
+| `SEED_DEMO_DATA` | `true` (første deploy – oppretter demobrukere automatisk; kan fjernes senere) |
 | `FEATURE_STRIPE` | `false` |
 | `ADMIN_EMAIL` | din e-post |
 

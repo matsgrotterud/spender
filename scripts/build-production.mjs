@@ -54,4 +54,10 @@ function run(cmd) {
 
 run("npx prisma generate");
 run("npx prisma migrate deploy");
+
+if (env.SEED_DEMO_DATA === "true") {
+  console.log("[build] SEED_DEMO_DATA=true – seeding demo users and content …");
+  run("npx tsx prisma/seed.ts");
+}
+
 run("npx next build");

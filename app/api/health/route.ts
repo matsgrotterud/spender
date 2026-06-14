@@ -18,15 +18,23 @@ export async function GET() {
 
   let database = false;
   let databaseError: string | undefined;
+  let userCount = 0;
+  let faqCount = 0;
 
   if (checks.databaseUrl) {
     try {
       await db.$queryRaw`SELECT 1`;
       database = true;
+      [userCount, faqCount] = await Promise.all([
+        db.user.count(),
+        db.faqItem.count({ where: { isActive: true } }),
+      ]);
     } catch (error) {
       databaseError = error instanceof Error ? error.message : "connection failed";
     }
   }
+
+  const seeded = userCount > 0;
 
   const ok =
     checks.databaseUrl &&
@@ -37,11 +45,15 @@ export async function GET() {
   return NextResponse.json(
     {
       ok,
+      seeded,
+      counts: { users: userCount, faqItems: faqCount },
       checks: { ...checks, database },
       ...(databaseError ? { databaseError } : {}),
-      hint: ok
-        ? undefined
-        : "Sett DATABASE_URL, DIRECT_URL, AUTH_SECRET, ENCRYPTION_KEY og APP_URL i Vercel. Kjør deretter db:seed mot produksjons-DB.",
+      hint: !database
+        ? "Sett DATABASE_URL, DIRECT_URL, AUTH_SECRET, ENCRYPTION_KEY og APP_URL i Vercel."
+        : !seeded
+          ? "Databasen er tom. Kjør npm run db:seed mot produksjon, eller sett SEED_DEMO_DATA=true i Vercel og redeploy."
+          : undefined,
     },
     { status: ok ? 200 : 503 },
   );
